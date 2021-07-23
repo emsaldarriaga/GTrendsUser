@@ -1,0 +1,123 @@
+---
+title: "Google Trends: Compare Popularity of Queries"
+author: |
+  | Enrique M. Saldarriaga
+date: "July-2021"
+output: 
+  html_document:
+    theme: spacelab
+runtime: shiny
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+sapply(c("ggplot2","dplyr","gtrendsR","flexdashboard",
+         "shiny","scatterplot3d","car","plotly","ggwordcloud","cowplot",
+         'archive','wordcloud2','wordcloud','tm'),require, character.only=TRUE)
+```
+
+## Google Trends
+Google Trends is a service that leverages Google's search engine to analyze the popularity of a term over time in the entire world or by region. The search volume of each term at each time point is divided by the total searches in the time range and region defined so every value is bounded between 0 and 100. This value, named "search hits" represents the popularity of the term.
+
+For example, if we search for "Obamacare" and "Medicare" from 2008 to 2015 in the US, we would obtain a metric of the interest over time where the term with the biggest search volume would be 100 and all the other terms proportionally less. To learn more about the metric and the scaling process visit the [Google Trends FAQ](https://support.google.com/trends/answer/4365533?hl=en)
+
+```{r ex1, echo=FALSE, message=FALSE, results='asis', fig.align='center', eval=TRUE}
+ex1 = gtrendsR::gtrends(keyword = c("Obamacare","Medicare"), geo="US",
+                        time = "2008-1-1 2015-1-1")
+plot(ex1)
+```
+
+This is a great tool to observe and analyze changes in the popularity of a term over time, compare the popularity of two or more terms, assess the temporal correlation of the terms' popularity, and more.
+
+## `gtrendsR`: A package to obtain Google Trends in R
+The main delivery system for this services is the Google Trends  [webpage](https://trends.google.com/trends/?geo=US). It offers a multitude of information including, popular searches by country (aka trending topics), maps showing the most popular search by state, and it offers the opportunity to enter up to 5 terms to compare their popularity over time. In additon, for each term we obtain related queries.
+
+While this is very useful - especially to to get more familiar with the tool and for exploration - it could be time consuming for further data manipulation and analysis. That is why [Philippe Massicotte](https://github.com/PMassicotte) developed `gtrendsR`, an interface to retrieve Google Trends data. The package main function is `gtrends()` and it uses the same information as the webpage: terms (up to 5 as well), the location, and the period. Check the [CRAN documentation](https://cran.r-project.org/web/packages/gtrendsR/gtrendsR.pdf) for more details. Most of this information would be tedious to obtain via the web page, but using `gtrends()` takes a few seconds.
+
+## Create your own searches
+
+Below you can input up to 5 simultaneous terms to be compared over time and the location of the search using a [2-digit country code](https://www.nationsonline.org/oneworld/country_code_list.htm). You can add one location or as many terms you entered for comparisons across countries. (See what happens when you add one term and multiple country codes) The period of the search is also customizable and it follows the format "Y-M-D Y-M-D" and it can go as far as 2004, where Google started the Google Trends; eg, "2015-1-1 2020-1-1" (no zeroes in front of day or month), for a search from January first, 2015 to January first 2020.
+
+```{r, echo=FALSE, include=TRUE, message=FALSE, warning=FALSE, error=FALSE, }
+#it's preferable to have a reactive function (eg, if(is.null()){}) but that didn't work, so this chunk hides the error
+tags$style(type="text/css",
+      ".shiny-output-error { visibility: hidden; }",
+      ".shiny-output-error:before { visibility: hidden; }")
+
+shiny::textInput("t1","Enter the search terms you want to include; up to 5 separated by a commas","Google", width = "100%")
+#actionButton("add","Add Term")
+# shiny::textInput("t2","")
+# shiny::textInput("t3","")
+# shiny::textInput("t4","")
+# shiny::textInput("t5","")
+# link <- a("Country Code List", href="https://www.nationsonline.org/oneworld/country_code_list.htm")
+shiny::textInput("t2","Enter the location of the search; using the 2-digit country code and separated by commas",
+                 "US", width = "100%")
+shiny::textInput("t3","Enter the period of the search; format 'Y-M-D Y-M-D'; lowest value: 2004-1-1",
+                 "2015-1-1 2020-1-1", width = "100%")
+
+renderPlot({
+  s1 = input$t1
+  #l = input$t2
+  t = input$t3
+  
+  search = unlist(strsplit(s1,";|,")) %>% .[!.==""]
+  l = unlist(strsplit(input$t2,";|,| ")) %>% .[!.==""]
+  g = if(length(search)==1|length(search)==length(l)){l}else{rep(l[1],times=length(search))}
+  
+    
+  ser <- gtrends(keyword = search, geo=g,
+                   time = t)
+      
+  p1 = plot(ser)  
+
+wer = data.table::setDT(data.frame(Key=ser[["related_queries"]][["keyword"]],
+                                   Query=ser[["related_queries"]][["value"]]))
+
+prep = function(array){ #based on world wordcloudES "Resumegit/ESworldcloud.R"
+  options(warn=-1)  
+  array <- gsub("[][]|[^[:ascii:]]", "", array, perl=T)
+  array <- gsub("[[:punct:]]", "", array, perl=T)
+  corpus = Corpus(VectorSource(array))
+  
+  corpus <- corpus %>%
+    tm_map(removeNumbers) %>%
+    tm_map(removePunctuation) #%>%
+    #tm_map(stripWhitespace)
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, removeWords, stopwords("english"))
+  
+  #Create each word in your first column and their frequency in the second column.
+  corpusm <- TermDocumentMatrix(corpus) 
+  corpusm <- as.matrix(corpusm) 
+  corpusw <- sort(rowSums(corpusm),decreasing=TRUE) 
+  corpusw <- data.frame(word = names(corpusw),freq=corpusw)
+  rownames(corpusw) = 1:nrow(corpusw)
+  
+  options(warn=0)
+  return(corpusw)
+}
+
+u = unique(wer$Key)
+werl = NULL
+for(i in 1:length(u)){
+ex = u[i]
+array=wer[wer$Key==ex,]$Query
+corpusw = prep(array)
+corpusw = data.frame(key=ex,corpusw[!corpusw$word%in%tolower(ex),])
+werl = rbind(werl,corpusw)
+}
+
+set.seed(42)
+p2 = ggplot(werl, aes(label = word, size=freq,
+                    color = factor(sample.int(10, nrow(werl), replace = TRUE)))) +
+  scale_size_area(max_size=20)+
+  scale_color_viridis_d()+
+  geom_text_wordcloud_area(eccentricity = 1, shape="circle") +
+  theme_minimal() + facet_wrap(~key)+
+  theme(strip.text.x = element_text(size = 18, colour = "midnightblue", angle = 0))
+
+cowplot::plot_grid(p1,p2,nrow=1,greedy = T, align = "hv")
+})
+```
